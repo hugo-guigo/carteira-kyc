@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  DJANGO_SECRET_KEY: chave-so-para-o-ci
+  DATABASE_URL: postgresql://carteira:carteira@127.0.0.1:5432/carteira
+  DEMO_SENHA: senha-demo-do-ci-7731
+
+jobs:
+  backend:
+    name: Backend (pytest-django + Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: { POSTGRES_USER: carteira, POSTGRES_PASSWORD: carteira, POSTGRES_DB: carteira }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U carteira" --health-interval 2s --health-retries 30
+    defaults: { run: { working-directory: backend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+      - run: pip install -r requirements-dev.txt
+      - run: python manage.py makemigrations --check --dry-run
+      - run: pytest -v
+
+  frontend:
+    name: Frontend (lint, Vitest, build)
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: frontend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  e2e:
+    name: Ponta a ponta (Playwright)
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: { POSTGRES_USER: carteira, POSTGRES_PASSWORD: carteira, POSTGRES_DB: carteira }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U carteira" --health-interval 2s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - name: Banco com migrações e usuários de demonstração
+        working-directory: backend
+        run: |
+          pip install -r requirements.txt
+          python manage.py migrate
+          python manage.py popular_demo
+      - name: Playwright
+        working-directory: frontend
+        env: { PYTHON: python }
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npx playwright test --reporter=line

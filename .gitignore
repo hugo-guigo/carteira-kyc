@@ -6,3 +6,5 @@ __pycache__/
 backend/media/
 node_modules/
 frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
