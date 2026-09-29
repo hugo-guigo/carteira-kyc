@@ -100,7 +100,7 @@ flowchart LR
 # Carteira KYC (English)
 
 **Work in progress. This is the first slice:** sign-up, identity verification (KYC) and an audit trail.
-Deposits, withdrawals and statements do not exist yet, and the project is not deployed to the cloud yet.
+Deposits, withdrawals and statements do not exist yet.
 **Fictional** fintech domain: no real documents, IDs or money.
 
 ## What works
@@ -122,8 +122,6 @@ Python, Django 6.1, Django REST Framework, Simple JWT, PostgreSQL 17 on the back
 4. **Uploads checked by file signature**, not by the browser-provided content type.
 5. **Public sign-up always creates a customer**; a `role` field in the request body is ignored (tested).
 6. **CPF check digits validated on both sides.**
-
-## Limitations and next steps
 
 ## On AWS
 
