@@ -17,11 +17,11 @@ Metadata:
       - { at: README.md, has: decisões e limitações, scope: projeto }
 
 Parameters:
-  RepositorioGitHub:
+  RepositorioOidc:
     Type: String
-    Default: hugo-guigo/carteira-kyc
-    AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
-    Description: owner/repo autorizado a fazer deploy via OIDC
+    Default: hugo-guigo@169164791/carteira-kyc@1396398089
+    AllowedPattern: '^[A-Za-z0-9_.-]+@[0-9]+/[A-Za-z0-9_.-]+@[0-9]+$'
+    Description: dono@id/repo@id como aparece no claim sub do token OIDC do GitHub
   SsmCaminho:
     Type: String
     Default: /carteira-kyc
@@ -308,9 +308,9 @@ Resources:
     Type: AWS::IAM::Role
     Metadata:
       com.aws.cloudformation.Context:
-        why: GitHub Actions assume via OIDC (token curto por job, nada guardado no repo); só push na main do repo
+        why: GitHub Actions assume via OIDC (token curto por job, nada guardado no repo); só push na main do repo. sub traz ids imutáveis de dono e repo (visto no CloudTrail em 29/09/2026) -> repo recriado com mesmo nome não herda acesso
         must:
-          - sub preso a repo:<RepositorioGitHub>:ref:refs/heads/main; nunca curinga de repo
+          - sub preso a repo:<RepositorioOidc>:ref:refs/heads/main; nunca curinga de repo
           - sem permissão de ler segredos do SSM: migração roda dentro do Lambda
     Properties:
       MaxSessionDuration: 3600
@@ -324,7 +324,7 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${RepositorioGitHub}:ref:refs/heads/main'
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${RepositorioOidc}:ref:refs/heads/main'
       Policies:
         - PolicyName: deploy
           PolicyDocument:
