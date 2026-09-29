@@ -1,0 +1,6 @@
+# O que vai no pacote do Lambda. boto3/botocore já vêm no runtime Python do Lambda e ficam de fora
+# (economizam ~80 MB descompactados).
+-r requirements.txt
+django-storages==1.14.6
+mangum==0.22.0
+tzdata==2025.3

@@ -2,7 +2,7 @@
 import os
 from datetime import timedelta
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 from dotenv import load_dotenv
 
@@ -75,6 +75,12 @@ DATABASES = {
         "HOST": _db.hostname,
         "PORT": _db.port or 5432,
         "CONN_MAX_AGE": 60,
+        # Parâmetros da URL (?sslmode=require&channel_binding=require no Neon) viram opções do driver.
+        # prepare_threshold=None: o pooler do Neon (PgBouncer em modo transação) pode entregar cada
+        # transação a uma conexão diferente, e comando preparado numa conexão não existe na outra.
+        "OPTIONS": {**dict(parse_qsl(_db.query)), "prepare_threshold": None},
+        # Cursor do lado do servidor vive além da transação; com pooler em modo transação ele se perde.
+        "DISABLE_SERVER_SIDE_CURSORS": True,
     }
 }
 
@@ -93,7 +99,22 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
-MEDIA_ROOT = BASE_DIR / "media"  # documentos fictícios; na nuvem vão para o S3
+MEDIA_ROOT = BASE_DIR / "media"  # documentos fictícios em disco local no desenvolvimento
+
+# Na AWS, os documentos vão para um bucket S3 privado (criptografado, só HTTPS). O Lambda tem
+# permissão só no prefixo kyc/; o navegador nunca acessa o bucket, só a API com o token.
+BUCKET_DOCUMENTOS = os.environ.get("BUCKET_DOCUMENTOS")
+if BUCKET_DOCUMENTOS:
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.s3.S3Storage",
+            # file_overwrite=True: o nome já é um UUID (kyc/models.py), não há colisão a evitar. Com False
+            # o storage faz HeadObject antes de gravar, e sem s3:ListBucket o S3 responde 403 (não 404)
+            # para objeto inexistente; o upload quebrava. Assim o papel do Lambda segue sem ListBucket.
+            "OPTIONS": {"bucket_name": BUCKET_DOCUMENTOS, "default_acl": None, "file_overwrite": True},
+        },
+        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    }
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -102,8 +123,11 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 20,
-    "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.AnonRateThrottle"],
-    "DEFAULT_THROTTLE_RATES": {"anon": "30/min"},
+    # Limite por minuto: a demo é pública. O contador fica na memória de cada instância do Lambda,
+    # então é aproximado (cada instância conta separado); serve contra abuso casual, não contra ataque.
+    "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.AnonRateThrottle",
+                                 "rest_framework.throttling.UserRateThrottle"],
+    "DEFAULT_THROTTLE_RATES": {"anon": "30/min", "user": "60/min"},
 }
 
 SIMPLE_JWT = {

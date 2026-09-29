@@ -1,0 +1,373 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Carteira KYC (demo com dados fictícios) - API Django no Lambda (Function URL), documentos no S3 privado,
+  segredos no SSM. Frontend no GitHub Pages ou, com UsarCloudFront=true, no S3 atrás do CloudFront.
+  Serverless para custo zero parado.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    arch: navegador (React no GitHub Pages) -> Function URL -> Lambda Django -> Neon Postgres + S3 documentos; segredos no SSM; opcional CloudFront na frente de S3 site + /api/*
+    why: CloudFront desligado por padrão porque conta nova foi bloqueada (account must be verified, 403) em 29/09/2026
+    must:
+      - segredos (SECRET_KEY, DATABASE_URL, DEMO_SENHA) só no SSM SecureString sob SsmCaminho; nunca no template
+      - deploy do código fora do CFN (scripts/deploy.py); o CFN só cria a infra
+    ref:
+      - { at: README.md, has: decisões e limitações, scope: projeto }
+
+Parameters:
+  RepositorioGitHub:
+    Type: String
+    Default: hugo-guigo/carteira-kyc
+    AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+    Description: owner/repo autorizado a fazer deploy via OIDC
+  SsmCaminho:
+    Type: String
+    Default: /carteira-kyc
+    AllowedPattern: '^/[a-z0-9-]+$'
+    Description: caminho (sem barra final) dos parâmetros SecureString lidos pelo Lambda
+  UsarCloudFront:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: true só depois de o Suporte da AWS verificar a conta para CloudFront
+  OrigemFrontend:
+    Type: String
+    Default: https://hugo-guigo.github.io
+    AllowedPattern: '^https://[a-z0-9.-]+$'
+    Description: origem liberada no CORS quando o frontend fica fora da AWS
+  CriarProvedorOidc:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: false se a conta já tiver o provedor OIDC do GitHub
+
+Conditions:
+  CriaOidc: !Equals [!Ref CriarProvedorOidc, 'true']
+  ComCloudFront: !Equals [!Ref UsarCloudFront, 'true']
+
+Resources:
+  # ---------- Site (React) ----------
+  BucketSite:
+    Type: AWS::S3::Bucket
+    Condition: ComCloudFront
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: build do React; privado, lido só pelo CloudFront via OAC; conteúdo é regenerado a cada deploy -> Delete ok, sem versionamento
+        must:
+          - sem acesso público; só CloudFront (OAC)
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+
+  PoliticaBucketSite:
+    Type: AWS::S3::BucketPolicy
+    Condition: ComCloudFront
+    Properties:
+      Bucket: !Ref BucketSite
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: SoCloudFrontDestaDistribuicao
+            Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub '${BucketSite.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribuicao}'
+          - Sid: SoHttps
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource: [!GetAtt BucketSite.Arn, !Sub '${BucketSite.Arn}/*']
+            Condition: { Bool: { aws:SecureTransport: 'false' } }
+
+  # ---------- Documentos de KYC ----------
+  BucketDocumentos:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: documentos enviados na demo; privados, só o Lambda lê/grava; expiram em 30d porque a demo é pública e não deve acumular uploads
+        must:
+          - nunca público; browser só baixa via API autenticada
+          - manter expiração: demo pública pode receber upload real por engano
+        mutable: change-with-constraints
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      VersioningConfiguration: { Status: Enabled }
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpiraUploadsDaDemo
+            Status: Enabled
+            ExpirationInDays: 30
+            NoncurrentVersionExpiration: { NoncurrentDays: 1 }
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 }
+
+  PoliticaBucketDocumentos:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BucketDocumentos
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: SoHttps
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource: [!GetAtt BucketDocumentos.Arn, !Sub '${BucketDocumentos.Arn}/*']
+            Condition: { Bool: { aws:SecureTransport: 'false' } }
+
+  # ---------- API (Django no Lambda) ----------
+  LogsApi:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-api'
+      RetentionInDays: 14
+
+  PapelApi:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: menor privilégio - só o log group próprio, leitura dos segredos sob o prefixo e objetos do bucket de documentos
+        must:
+          - sem s3:ListBucket/DeleteObject: API não lista nem apaga documentos
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { aws:SourceAccount: !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: api
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub '${LogsApi.Arn}:*'
+              - Effect: Allow
+                Action: ssm:GetParametersByPath
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmCaminho}'
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmCaminho}/*'
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: '*'
+                Condition:
+                  StringEquals: { kms:ViaService: !Sub 'ssm.${AWS::Region}.amazonaws.com' }
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub '${BucketDocumentos.Arn}/kyc/*'
+
+  FuncaoApi:
+    Type: AWS::Lambda::Function
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Django via Mangum; arm64 (mais barato); código inicial é placeholder, o real vem de scripts/deploy.py; migrate/popular_demo rodam por invocação direta (IAM), nunca pela URL pública
+        must:
+          - Handler=lambda_handler.handler casa com backend/lambda_handler.py
+          - Timeout < 60s (limite de origem do CloudFront)
+        mutable: change-with-constraints
+        mutability:
+          MemorySize: free-to-tune
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-api'
+      Runtime: python3.13
+      Architectures: [arm64]
+      Handler: lambda_handler.handler
+      MemorySize: 512
+      Timeout: 20
+      Role: !GetAtt PapelApi.Arn
+      LoggingConfig: { LogGroup: !Ref LogsApi }
+      Environment:
+        Variables:
+          SSM_PREFIXO: !Ref SsmCaminho
+          BUCKET_DOCUMENTOS: !Ref BucketDocumentos
+          DJANGO_ALLOWED_HOSTS: !Sub '.lambda-url.${AWS::Region}.on.aws'
+          DJANGO_DEBUG: 'false'
+          CORS_ALLOWED_ORIGINS: !If [ComCloudFront, '', !Ref OrigemFrontend]
+      Code:
+        ZipFile: |
+          def handler(evento, contexto):
+              return {"statusCode": 503, "body": "deploy do codigo pendente"}
+
+  UrlApi:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt FuncaoApi.Arn
+      AuthType: NONE
+
+  PermissaoUrlPublica:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref FuncaoApi
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+
+  PermissaoInvocacaoViaUrl:
+    Type: AWS::Lambda::Permission
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Function URL exige InvokeFunction além de InvokeFunctionUrl; InvokedViaFunctionUrl restringe a chamadas pela URL (não abre invoke direto)
+    Properties:
+      FunctionName: !Ref FuncaoApi
+      Action: lambda:InvokeFunction
+      Principal: '*'
+      InvokedViaFunctionUrl: true
+
+  # ---------- CloudFront ----------
+  OacSite:
+    Type: AWS::CloudFront::OriginAccessControl
+    Condition: ComCloudFront
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-site'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  Distribuicao:
+    Type: AWS::CloudFront::Distribution
+    Condition: ComCloudFront
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: uma origem p/ site e API -> sem CORS e tokens na mesma origem; PriceClass_100 = mais barato
+        must:
+          - /api/* sem cache (CachingDisabled) e repassando Authorization (AllViewerExceptHostHeader)
+          - sem CustomErrorResponses: transformaria 404 da API em index.html
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub '${AWS::StackName} (demo, dados ficticios)'
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: site
+            DomainName: !GetAtt BucketSite.RegionalDomainName
+            OriginAccessControlId: !GetAtt OacSite.Id
+            S3OriginConfig: { OriginAccessIdentity: '' }
+          - Id: api
+            DomainName: !Select [2, !Split ['/', !GetAtt UrlApi.FunctionUrl]]
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+        DefaultCacheBehavior:
+          TargetOriginId: site
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6          # CachingOptimized
+          ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03 # SecurityHeadersPolicy
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: api
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad          # CachingDisabled
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # AllViewerExceptHostHeader
+            ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03
+
+  # ---------- Deploy pelo GitHub Actions (OIDC, sem chave) ----------
+  ProvedorOidcGitHub:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CriaOidc
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+
+  PapelDeploy:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: GitHub Actions assume via OIDC (token curto por job, nada guardado no repo); só push na main do repo
+        must:
+          - sub preso a repo:<RepositorioGitHub>:ref:refs/heads/main; nunca curinga de repo
+          - sem permissão de ler segredos do SSM: migração roda dentro do Lambda
+    Properties:
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${RepositorioGitHub}:ref:refs/heads/main'
+      Policies:
+        - PolicyName: deploy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [lambda:UpdateFunctionCode, lambda:GetFunction, lambda:GetFunctionConfiguration, lambda:InvokeFunction]
+                Resource: !GetAtt FuncaoApi.Arn
+              - !If
+                - ComCloudFront
+                - Effect: Allow
+                  Action: [s3:ListBucket, s3:PutObject, s3:DeleteObject]
+                  Resource: [!GetAtt BucketSite.Arn, !Sub '${BucketSite.Arn}/*']
+                - !Ref AWS::NoValue
+              - !If
+                - ComCloudFront
+                - Effect: Allow
+                  Action: cloudfront:CreateInvalidation
+                  Resource: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribuicao}'
+                - !Ref AWS::NoValue
+              - Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource: !Ref AWS::StackId
+
+Outputs:
+  UrlApi:
+    Description: Endereço público da API (Function URL)
+    Value: !GetAtt UrlApi.FunctionUrl
+  UrlSite:
+    Condition: ComCloudFront
+    Description: Endereço público da demo no CloudFront
+    Value: !Sub 'https://${Distribuicao.DomainName}'
+  FuncaoApi:
+    Description: Nome da função Lambda da API
+    Value: !Ref FuncaoApi
+  BucketSite:
+    Condition: ComCloudFront
+    Description: Bucket do build do React
+    Value: !Ref BucketSite
+  DistribuicaoId:
+    Condition: ComCloudFront
+    Description: Id da distribuição CloudFront (para invalidar cache)
+    Value: !Ref Distribuicao
+  PapelDeployArn:
+    Description: Papel que o GitHub Actions assume via OIDC
+    Value: !GetAtt PapelDeploy.Arn

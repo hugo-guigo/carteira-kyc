@@ -1,0 +1,61 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Alerta de orçamento da conta (criado antes de qualquer recurso) - avisa por email se o custo bruto do
+  mês passar de US$ 1, sem descontar créditos, para nada consumir o plano Free sem aviso.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
+Parameters:
+  EmailAlerta:
+    Type: String
+    Description: Email que recebe os alertas de orçamento
+    AllowedPattern: '^[^@\s]+@[^@\s]+\.[^@\s]+$'
+  LimiteMensalUsd:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    Description: Teto mensal em dólares
+
+Resources:
+  OrcamentoMensal:
+    Type: AWS::Budgets::Budget
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: conta pessoal de estudante p/ demo; plano Free usa créditos -> custo líquido fica 0 e esconderia consumo; IncludeCredit=false mostra o bruto
+        must:
+          - IncludeCredit=false, senão o alerta nunca dispara enquanto houver crédito
+        mutable: free-to-tune
+    Properties:
+      Budget:
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref LimiteMensalUsd
+          Unit: USD
+        CostTypes:
+          IncludeCredit: false
+          IncludeRefund: false
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 50
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref EmailAlerta
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref EmailAlerta
+
+Outputs:
+  Orcamento:
+    Description: Nome do orçamento criado
+    Value: !Ref OrcamentoMensal
