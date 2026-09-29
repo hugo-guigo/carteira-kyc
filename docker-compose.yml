@@ -1,0 +1,20 @@
+# Postgres local para desenvolvimento e testes. Porta 5434 para não brigar com os outros projetos.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: carteira
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina no .env}
+      POSTGRES_DB: carteira
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - dados_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U carteira -d carteira"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  dados_pg:
