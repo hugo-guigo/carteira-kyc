@@ -59,3 +59,7 @@ table { width: 100%; border-collapse: collapse; background: var(--cartao); font-
 th, td { text-align: left; padding: 0.55rem; border-bottom: 1px solid var(--borda); }
 @media (max-width: 600px) { table { display: block; overflow-x: auto; } }
 section > .mudo { margin-bottom: 0.8rem; }
+
+h3 { font-size: 1rem; margin: 0.6rem 0 0; }
+.entrada { color: var(--verde); font-variant-numeric: tabular-nums; }
+.saida { color: var(--vermelho); font-variant-numeric: tabular-nums; }

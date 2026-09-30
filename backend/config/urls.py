@@ -3,6 +3,7 @@ from django.http import JsonResponse
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
+from carteira import views as carteira
 from contas import views as contas
 from kyc import views as kyc
 
@@ -18,4 +19,8 @@ urlpatterns = [
     path("api/kyc/<int:pk>/decisao", kyc.decisao),
     path("api/kyc/<int:pk>/documento", kyc.documento),
     path("api/auditoria", kyc.Auditoria.as_view()),
+    path("api/carteira", carteira.resumo),
+    path("api/carteira/depositos", carteira.depositos),
+    path("api/carteira/saques", carteira.saques),
+    path("api/carteira/extrato", carteira.Extrato.as_view()),
 ]

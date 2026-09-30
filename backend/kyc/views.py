@@ -62,7 +62,7 @@ class EventoSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = EventoAuditoria
-        fields = ["id", "ator_email", "acao", "verificacao", "dados", "criado_em"]
+        fields = ["id", "ator_email", "acao", "verificacao", "transacao", "dados", "criado_em"]
 
 
 class DecisaoSerializer(serializers.Serializer):

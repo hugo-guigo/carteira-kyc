@@ -1,4 +1,4 @@
-"""Teste de fumaça contra a API publicada: cadastro, KYC com upload, decisão, auditoria e documento.
+"""Teste de fumaça contra a API publicada: cadastro, KYC com upload, decisão, carteira, auditoria e documento.
 
 Uso: python scripts/fumaca.py https://<function-url>
 Lê DEMO_SENHA_PROD do .env (ou da variável de ambiente) para entrar como operador e compliance.
@@ -25,8 +25,8 @@ def senha_demo() -> str:
     raise SystemExit("DEMO_SENHA_PROD não encontrada")
 
 
-def pedir(base, metodo, caminho, token=None, json_corpo=None, multipart=None):
-    cabecalhos = {"Origin": "https://hugo-guigo.github.io"}
+def pedir(base, metodo, caminho, token=None, json_corpo=None, multipart=None, extras=None):
+    cabecalhos = {"Origin": "https://hugo-guigo.github.io", **(extras or {})}
     dados = None
     if token:
         cabecalhos["Authorization"] = f"Bearer {token}"
@@ -84,6 +84,31 @@ def main() -> None:
     checar.append(("operador aprova", s == 200 and json.loads(c)["status"] == "aprovada", ms))
     s, _, _, ms = pedir(base, "POST", f"/api/kyc/{vid}/decisao", operador, json_corpo={"aprovar": True})
     checar.append(("decidir de novo dá 409", s == 409, ms))
+
+    # Carteira: o navegador só manda o cabeçalho da chave se o CORS liberar (pergunta com OPTIONS antes)
+    _, _, h, _ = pedir(base, "OPTIONS", "/api/carteira/depositos", extras={
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "authorization,content-type,idempotency-key"})
+    checar.append(("CORS libera o cabeçalho Idempotency-Key",
+                   "idempotency-key" in h.get("Access-Control-Allow-Headers", "").lower(), 0))
+    chave = uuid.uuid4().hex
+    s, c, _, ms = pedir(base, "POST", "/api/carteira/depositos", cliente, json_corpo={"valor_centavos": 10_000},
+                        extras={"Idempotency-Key": chave})
+    deposito = json.loads(c)
+    checar.append(("depósito na conta aberta pela aprovação", s == 201 and deposito["saldo_centavos"] == 10_000, ms))
+    s, c, h, ms = pedir(base, "POST", "/api/carteira/depositos", cliente, json_corpo={"valor_centavos": 10_000},
+                        extras={"Idempotency-Key": chave})
+    checar.append(("mesma chave devolve o original sem gravar de novo", s == 200 and h.get("Idempotent-Replayed") == "true"
+                   and json.loads(c)["id"] == deposito["id"] and json.loads(c)["saldo_centavos"] == 10_000, ms))
+    s, _, _, ms = pedir(base, "POST", "/api/carteira/saques", cliente, json_corpo={"valor_centavos": 20_000},
+                        extras={"Idempotency-Key": uuid.uuid4().hex})
+    checar.append(("saque maior que o saldo dá 409", s == 409, ms))
+    s, c, _, ms = pedir(base, "POST", "/api/carteira/saques", cliente, json_corpo={"valor_centavos": 2_500},
+                        extras={"Idempotency-Key": uuid.uuid4().hex})
+    checar.append(("saque", s == 201 and json.loads(c)["saldo_centavos"] == 7_500, ms))
+    s, c, _, ms = pedir(base, "GET", "/api/carteira/extrato", cliente)
+    valores = [x["valor_centavos"] for x in json.loads(c)["results"]]
+    checar.append(("extrato com saque e depósito, do mais novo", s == 200 and valores == [-2_500, 10_000], ms))
 
     _, c, _, _ = pedir(base, "POST", "/api/token", json_corpo={"email": "compliance@demo.local", "password": senha})
     compliance = json.loads(c)["access"]

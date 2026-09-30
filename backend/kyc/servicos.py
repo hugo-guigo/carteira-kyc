@@ -5,6 +5,7 @@ Toda mudança de estado grava um EventoAuditoria na mesma transação: ou as dua
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
+from carteira.servicos import abrir_conta
 from kyc.models import EventoAuditoria, Status, Verificacao
 
 
@@ -43,6 +44,8 @@ def decidir(verificacao_id: int, operador, *, aprovar: bool, motivo: str = "") -
     v.decidido_por = operador
     v.decidido_em = timezone.now()
     v.save(update_fields=["status", "motivo_recusa", "decidido_por", "decidido_em"])
+    if aprovar:
+        abrir_conta(v.cliente)  # a conta nasce na mesma transação da aprovação
     EventoAuditoria.objects.create(ator=operador, acao="kyc_aprovado" if aprovar else "kyc_recusado",
                                    verificacao=v, dados={"antes": antes, "depois": v.status,
                                                          "motivo": v.motivo_recusa})

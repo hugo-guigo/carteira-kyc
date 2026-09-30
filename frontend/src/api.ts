@@ -16,9 +16,15 @@ export interface Verificacao {
   decidido_em: string | null; criado_em: string
 }
 export interface Evento {
-  id: number; ator_email: string; acao: string; verificacao: number; dados: Record<string, string>; criado_em: string
+  id: number; ator_email: string; acao: string; verificacao: number | null; transacao: string | null
+  dados: Record<string, string | number>; criado_em: string
 }
 interface Pagina<T> { count: number; results: T[] }
+export interface Lancamento {
+  id: number; transacao: string; tipo: 'deposito' | 'saque'; valor_centavos: number; criado_em: string
+}
+export interface Operacao { id: string; tipo: 'deposito' | 'saque'; valor_centavos: number; saldo_centavos: number }
+interface PaginaCursor<T> { next: string | null; results: T[] }
 
 export class ErroApi extends Error {
   status: number
@@ -125,4 +131,27 @@ export const auditoria = async () => (await json<Pagina<Evento>>('/api/auditoria
 export async function abrirDocumento(id: number): Promise<string> {
   const blob = await (await requisitar(`/api/kyc/${id}/documento`)).blob()
   return URL.createObjectURL(blob)
+}
+
+export async function saldoDaCarteira(): Promise<number | null> {
+  try {
+    return (await json<{ saldo_centavos: number }>('/api/carteira')).saldo_centavos
+  } catch (erro) {
+    if (erro instanceof ErroApi && erro.status === 404) return null  // KYC ainda não aprovado
+    throw erro
+  }
+}
+
+// A chave de idempotência vai num cabeçalho: se a mesma operação for repetida com a mesma chave (clique
+// duplo, falha de rede no meio), o backend devolve a transação original em vez de gravar outra.
+export const operar = (rota: 'depositos' | 'saques', valorCentavos: number, chave: string) =>
+  json<Operacao>(`/api/carteira/${rota}`, {
+    method: 'POST', body: JSON.stringify({ valor_centavos: valorCentavos }), headers: { 'Idempotency-Key': chave },
+  })
+
+// A API devolve o link da próxima página inteiro; aproveita só o cursor (?cursor=...), porque o
+// endereço absoluto montado pelo backend atrás do proxy da nuvem pode vir com http em vez de https.
+export async function extrato(cursor = ''): Promise<{ itens: Lancamento[]; proximo: string | null }> {
+  const pagina = await json<PaginaCursor<Lancamento>>(`/api/carteira/extrato${cursor}`)
+  return { itens: pagina.results, proximo: pagina.next ? new URL(pagina.next).search : null }
 }

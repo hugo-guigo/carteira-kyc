@@ -4,6 +4,7 @@ from datetime import timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl, urlparse
 
+from corsheaders.defaults import default_headers
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -33,6 +34,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "contas",
     "kyc",
+    "carteira",
 ]
 
 MIDDLEWARE = [
@@ -136,6 +138,10 @@ SIMPLE_JWT = {
 }
 
 CORS_ALLOWED_ORIGINS = env_lista("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+# Depósito e saque mandam a chave de idempotência num cabeçalho próprio; o navegador só envia
+# cabeçalhos que o CORS libera. A resposta repetida avisa pelo Idempotent-Replayed.
+CORS_ALLOW_HEADERS = (*default_headers, "idempotency-key")
+CORS_EXPOSE_HEADERS = ["Idempotent-Replayed"]
 
 # Documento de KYC: tipos e tamanho aceitos
 KYC_TIPOS_ACEITOS = {"application/pdf", "image/jpeg", "image/png"}

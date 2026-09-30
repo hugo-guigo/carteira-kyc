@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { auditoria, type Evento } from '../api'
+import { formatarCentavos } from '../dinheiro'
 
 const ACOES: Record<string, string> = {
   kyc_enviado: 'Enviou verificação', kyc_aprovado: 'Aprovou verificação', kyc_recusado: 'Recusou verificação',
+  deposito: 'Depositou', saque: 'Sacou',
 }
 
 export function PainelCompliance() {
@@ -21,15 +23,15 @@ export function PainelCompliance() {
       {eventos === null && !erro && <p>Carregando…</p>}
       {eventos && (
         <table>
-          <thead><tr><th>Quando</th><th>Quem</th><th>O quê</th><th>Pedido</th><th>Detalhes</th></tr></thead>
+          <thead><tr><th>Quando</th><th>Quem</th><th>O quê</th><th>Alvo</th><th>Detalhes</th></tr></thead>
           <tbody>
             {eventos.map(e => (
               <tr key={e.id}>
                 <td>{new Date(e.criado_em).toLocaleString('pt-BR')}</td>
                 <td>{e.ator_email}</td>
                 <td>{ACOES[e.acao] ?? e.acao}</td>
-                <td>#{e.verificacao}</td>
-                <td>{e.dados.motivo ? `Motivo: ${e.dados.motivo}` : ''}</td>
+                <td>{e.verificacao !== null ? `Verificação #${e.verificacao}` : 'Carteira'}</td>
+                <td>{detalhes(e)}</td>
               </tr>
             ))}
           </tbody>
@@ -37,4 +39,9 @@ export function PainelCompliance() {
       )}
     </section>
   )
+}
+
+function detalhes(e: Evento): string {
+  if (typeof e.dados.valor_centavos === 'number') return formatarCentavos(e.dados.valor_centavos)
+  return e.dados.motivo ? `Motivo: ${e.dados.motivo}` : ''
 }

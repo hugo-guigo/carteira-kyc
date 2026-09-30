@@ -47,13 +47,26 @@ class Verificacao(models.Model):
 
 
 class EventoAuditoria(models.Model):
-    """Trilha de auditoria: quem fez o quê e quando. Só recebe INSERT (trigger na migração 0002)."""
+    """Trilha de auditoria: quem fez o quê e quando. Só recebe INSERT (trigger na migração 0002).
+
+    Cada evento aponta para exatamente um alvo: uma verificação (KYC) ou uma transação da carteira
+    (migração 0003, que acrescentou a coluna transacao).
+    """
 
     ator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="eventos")
     acao = models.CharField(max_length=40)
-    verificacao = models.ForeignKey(Verificacao, on_delete=models.PROTECT, related_name="eventos")
+    verificacao = models.ForeignKey(Verificacao, null=True, blank=True, on_delete=models.PROTECT,
+                                    related_name="eventos")
+    transacao = models.ForeignKey("carteira.Transacao", null=True, blank=True, on_delete=models.PROTECT,
+                                  related_name="eventos")
     dados = models.JSONField(default=dict)
     criado_em = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-criado_em", "-id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(Q(verificacao__isnull=False) & Q(transacao__isnull=True))
+                | (Q(verificacao__isnull=True) & Q(transacao__isnull=False)),
+                name="evento_tem_um_alvo"),
+        ]

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { enviarVerificacao, ErroApi, minhaVerificacao, type Verificacao } from '../api'
 import { cpfValido, formatarCpf } from '../cpf'
+import { Carteira } from './Carteira'
 import { SeloStatus } from './SeloStatus'
 
 const TIPOS = ['application/pdf', 'image/jpeg', 'image/png']
@@ -26,11 +27,12 @@ export function PainelCliente() {
           <p>Pedido enviado em {new Date(verificacao.criado_em).toLocaleString('pt-BR')}</p>
           <SeloStatus status={verificacao.status} />
           {verificacao.status === 'pendente' && <p>Um operador vai analisar seus dados.</p>}
-          {verificacao.status === 'aprovada' && <p>Sua conta está liberada.</p>}
+          {verificacao.status === 'aprovada' && <p>Sua conta está liberada: a carteira está logo abaixo.</p>}
           {verificacao.status === 'recusada' && <p>Motivo: {verificacao.motivo_recusa}. Envie os dados de novo.</p>}
         </div>
       )}
       {podeEnviar && <FormularioKyc aoEnviar={setVerificacao} />}
+      {verificacao?.status === 'aprovada' && <Carteira />}
     </section>
   )
 }
