@@ -22,7 +22,13 @@ RAIZ = Path(__file__).resolve().parent.parent
 BACKEND = RAIZ / "backend"
 BUILD = RAIZ / "build"
 AWS = os.environ.get("AWS_CLI", "aws")
-CODIGO = ["config", "contas", "kyc", "lambda_handler.py", "manage.py"]
+ARQUIVOS = ["lambda_handler.py", "manage.py"]
+
+
+def pacotes_do_backend() -> list[str]:
+    """Toda pasta do backend com __init__.py, menos os testes. Antes a lista era fixa, e o app carteira
+    ficou de fora do primeiro deploy dele: o Lambda subiu sem o módulo e a API caiu até a correção."""
+    return sorted(p.name for p in BACKEND.iterdir() if (p / "__init__.py").exists() and p.name != "tests")
 
 
 def aws(*args: str) -> str:
@@ -43,7 +49,7 @@ def montar_pacote() -> Path:
                     "--platform", "manylinux2014_aarch64", "--platform", "manylinux_2_28_aarch64",
                     "--python-version", "3.13",
                     "--implementation", "cp", "--only-binary=:all:"], check=True)
-    for nome in CODIGO:
+    for nome in pacotes_do_backend() + ARQUIVOS:
         origem = BACKEND / nome
         destino = pasta / nome
         if origem.is_dir():
