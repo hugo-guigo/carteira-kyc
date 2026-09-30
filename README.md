@@ -94,7 +94,7 @@ flowchart LR
 - **Menor privilégio no S3.** O Lambda só lê e grava em `kyc/*`, sem listar nem apagar. Isso quebrou o primeiro upload: o `django-storages` checava se o arquivo existia, e sem `s3:ListBucket` o S3 responde 403 em vez de 404. A correção foi desligar a checagem (os nomes já são UUID), e não ampliar a permissão.
 - **Documentos expiram em 30 dias** (regra de ciclo de vida do bucket), porque a demo é pública.
 - **Neon pelo pooler** (PgBouncer em modo transação): comandos preparados e cursores do lado do servidor desligados no Django.
-- **Teste de fumaça contra a nuvem** ([scripts/fumaca.py](scripts/fumaca.py)): cadastro, upload no S3, download pelo operador, aprovação, conflito 409, carteira (CORS do cabeçalho da chave, depósito, repetição com a mesma chave, saque sem saldo, saque e extrato), auditoria e bloqueio do cliente. <!-- FUMACA -->
+- **Teste de fumaça contra a nuvem** ([scripts/fumaca.py](scripts/fumaca.py)): cadastro, upload no S3, download pelo operador, aprovação, conflito 409, carteira (CORS do cabeçalho da chave, depósito, repetição com a mesma chave, saque sem saldo, saque e extrato), auditoria e bloqueio do cliente. Passou nos 15 itens em 30/09/2026, com respostas entre 0,5 e 2 s (as mais lentas são cadastro e login, pelo hash de senha).
 - **Custo:** Lambda fica na cota grátis permanente (1 milhão de requisições por mês); S3 e logs são centavos cobertos pelos créditos do plano Free; Neon no plano grátis.
 
 ## Limitações e próximos passos
@@ -145,7 +145,7 @@ The spec, written before the code, and the review log of what was refused or fix
 
 Live demo: [hugo-guigo.github.io/carteira-kyc](https://hugo-guigo.github.io/carteira-kyc/). Anyone can sign up as a customer; operator and compliance accounts are not public because they expose other visitors' uploads.
 
-Frontend on GitHub Pages; Django API on AWS Lambda (arm64, Mangum) behind a Function URL; Neon Postgres; private S3 bucket for documents (30-day expiry); secrets in SSM Parameter Store, loaded at cold start. Infrastructure is CloudFormation (validated with cfn-lint), created after a US$ 1 monthly budget alert that ignores credits. No long-lived keys: `aws login` locally, GitHub Actions via OIDC with a role that only deploys code from main. Migrations run inside Lambda through an IAM-only direct invocation, so CI never sees the database password. A least-privilege S3 policy (no ListBucket) broke the first upload because S3 returns 403 instead of 404 for missing keys; the fix was to drop the existence check (keys are UUIDs), not to widen the policy. <!-- FUMACA-EN -->
+Frontend on GitHub Pages; Django API on AWS Lambda (arm64, Mangum) behind a Function URL; Neon Postgres; private S3 bucket for documents (30-day expiry); secrets in SSM Parameter Store, loaded at cold start. Infrastructure is CloudFormation (validated with cfn-lint), created after a US$ 1 monthly budget alert that ignores credits. No long-lived keys: `aws login` locally, GitHub Actions via OIDC with a role that only deploys code from main. Migrations run inside Lambda through an IAM-only direct invocation, so CI never sees the database password. A least-privilege S3 policy (no ListBucket) broke the first upload because S3 returns 403 instead of 404 for missing keys; the fix was to drop the existence check (keys are UUIDs), not to widen the policy. A smoke test against the cloud, now including the wallet, passed 15 of 15 checks on 2026-09-30.
 
 ## Limitations and next steps
 

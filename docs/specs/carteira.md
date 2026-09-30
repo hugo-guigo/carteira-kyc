@@ -90,6 +90,11 @@ O que mudou em relação à especificação, o que foi recusado e o que foi corr
 - *O extrato ficaria preso ao endereço absoluto da API.* O link da próxima página vem montado pelo
   backend; atrás do proxy da nuvem ele pode sair com http em vez de https. O frontend usa só o cursor.
 - *Aviso do lint no React* (`setState` dentro de efeito): a carga inicial virou uma cadeia de promessas.
+- *O primeiro deploy derrubou a API por 3,5 minutos.* O script de deploy empacotava uma lista fixa de
+  pastas do backend, e o app `carteira` não estava nela: o Lambda subiu sem o módulo
+  (`ImportModuleError`) e a migração falhou. Os testes do CI passaram porque rodam o código do
+  repositório, não o pacote. O script passou a empacotar todo pacote Python do backend, e o deploy
+  seguinte (com migração no Neon e teste de fumaça de 15 itens) passou.
 
 ### Mudou na implementação
 
